@@ -118,6 +118,33 @@ uv run ruff format .           # format code
 
 Configuration is in `pyproject.toml` under `[tool.ruff]` and `[tool.ruff.format]`.
 
+### 9. Docker one-command startup
+
+Alternatively, start the whole app (backend + frontend) with a single command:
+
+```bash
+cp .env.example .env    # fill PINECONE_API_KEY, PINECONE_INDEX, GROQ_API_KEY
+docker compose up       # backend on :8000, frontend on :5173
+```
+
+Docker Compose automatically loads `.env`, so fill in your Pinecone and Groq
+keys there for AI review and ingestion. Deterministic checks and history work
+without them.
+
+- `backend` (port 8000): FastAPI API; runs `ingest.py` on first start to build
+  `data/bm25.pkl` from `docs2/*.pdf`, then serves the API.
+- `frontend` (port 5173): React + Vite dev server; proxies `/api` to the
+  backend via `VITE_PROXY_TARGET=http://backend:8000`.
+- `marketplace-data` volume: persists SQLite (`data/reviews.db`) and the BM25
+  model (`data/bm25.pkl`) across restarts.
+
+Open http://localhost:5173. Then, in the UI header, **Initialize models**,
+enter a **Reviewer name**, and use the Review / Batch / Compare / History / Ask
+tabs.
+
+Stop with `docker compose down`. Data persists in the `marketplace-data`
+volume; remove it with `docker compose down -v` to start fresh.
+
 ---
 
 ## 1. Approach and design decisions

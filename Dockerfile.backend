@@ -1,0 +1,27 @@
+# Marketplace Listing Quality Reviewer — backend (FastAPI)
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# Runtime dependencies (requirements.txt covers FastAPI, uvicorn, langchain,
+# pinecone, sentence-transformers, rank-bm25, nltk, pypdf, python-dotenv).
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
+
+# Application code.
+COPY . .
+
+EXPOSE 8000
+
+# Entrypoint: ingest policy PDFs into Pinecone + BM25 when credentials are
+# present and no BM25 model exists yet, then start the API. Deterministic
+# checks and history work without ingestion (degraded mode).
+COPY docker/backend-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]

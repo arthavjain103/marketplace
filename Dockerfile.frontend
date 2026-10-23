@@ -1,0 +1,18 @@
+# Marketplace Listing Quality Reviewer — frontend (React + Vite)
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+
+EXPOSE 5173
+
+# Vite proxies /api to VITE_PROXY_TARGET (defaults to localhost for local dev;
+# docker-compose sets it to http://backend:8000).
+ENV VITE_PROXY_TARGET=http://127.0.0.1:8000
+
+# Bind to all interfaces so the dev server is reachable outside the container.
+CMD ["npm", "run", "dev", "--", "--host"]
