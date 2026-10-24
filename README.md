@@ -99,13 +99,28 @@ needs ingested data).
 ### 7. Test
 
 ```bash
-uv run pytest tests/ -q                    # 19 tests, no API keys required
-uv run pytest tests/ --cov                 # with coverage (min 50%)
+uv run pytest tests/ -q                    # full suite, no API keys required
+uv run pytest tests/ --cov                 # with coverage (min 60% enforced)
+uv run pytest tests/ -m integration -ra    # integration subset only
+RUN_MODEL_TESTS=1 uv run pytest tests/ -m integration -v   # real models (downloads)
 ```
+
+The default suite is hermetic: no API keys and no model downloads. Tests
+marked `integration` exercise real component interactions (chunker → BM25 →
+hybrid search → reranker) against the actual implementations. The real-model
+tests in `tests/test_integration_models.py` skip unless `RUN_MODEL_TESTS=1`
+is set, because they download models into the local HuggingFace cache on
+first run; the Pinecone test additionally needs `PINECONE_API_KEY` and
+`PINECONE_INDEX`.
 
 - `tests/test_validator.py` — deterministic checks
 - `tests/test_store.py` — review/finding flow, append-only audit log
 - `tests/test_backend.py` — API guards, outcome ladder, revised-text builder
+- `tests/test_hybrid.py` — RRF fusion logic (mocked retrievers)
+- `tests/test_reranker.py` — reranking order, input shapes, top_n
+- `tests/test_ingestion.py` — embedder prefixes, chunker routing, PDF loading, upload ids
+- `tests/test_integration_retrieval.py` — end-to-end retrieval over real components
+- `tests/test_integration_models.py` — real e5 / cross-encoder / Pinecone (opt-in)
 
 ### 8. Lint
 

@@ -49,6 +49,32 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+  integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --dev
+
+      # Exercises real component interactions (chunker -> BM25 -> hybrid ->
+      # reranker). Tests that need real model weights or API keys skip
+      # themselves, so this downloads nothing beyond the small nltk tokenizer.
+      # To run the real-model tests locally:
+      #   RUN_MODEL_TESTS=1 uv run pytest tests/ -m integration -v
+      - name: Run integration tests
+        run: uv run pytest tests/ -m integration --no-cov -ra
+
   pip-audit:
     runs-on: ubuntu-latest
     steps:

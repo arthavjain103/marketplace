@@ -35,6 +35,9 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "--cov --cov-report=term-missing --cov-fail-under=60"
 testpaths = ["tests"]
+markers = [
+    "integration: exercises real component interactions (runs in the default suite; real-model tests inside it skip unless RUN_MODEL_TESTS=1)",
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]
@@ -78,6 +81,15 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "lf"
+
+[tool.mypy]
+explicit_package_bases = true
+mypy_path = "."
+ignore_missing_imports = false
+
+[[tool.mypy.overrides]]
+module = ["rank_bm25", "nltk"]
+ignore_missing_imports = true
 
 [tool.uv]
 dev-dependencies = [

@@ -1,10 +1,13 @@
 import nltk
 from rank_bm25 import BM25Okapi
 
-try:
-    nltk.data.find("tokenizers/punkt")
-except LookupError:
-    nltk.download("punkt")
+# nltk >= 3.9 needs punkt_tab for word_tokenize; older data layouts only
+# ship punkt, so ensure both before tokenizing.
+for _resource in ("punkt", "punkt_tab"):
+    try:
+        nltk.data.find(f"tokenizers/{_resource}")
+    except LookupError:
+        nltk.download(_resource)
 
 
 class KeywordSearchBM25:
@@ -61,26 +64,23 @@ class KeywordSearchBM25:
 # Example usage
 if __name__ == "__main__":
     documents = [
-        """Machine learning is a field of artificial intelligence that uses statistical techniques
-        to give computer systems the ability to learn from data, without being explicitly programmed.
-        This includes supervised learning, unsupervised learning, and reinforcement learning.""",
-
+        """Machine learning is a field of artificial intelligence that uses statistical
+        techniques to give computer systems the ability to learn from data, without
+        being explicitly programmed. This includes supervised learning, unsupervised
+        learning, and reinforcement learning.""",
         """Natural language processing (NLP) is a branch of artificial intelligence focused on the
         interaction between computers and humans through natural language. NLP includes tasks like
         language translation, sentiment analysis, and speech recognition.""",
-
         """BM25 is an algorithm used in information retrieval that ranks documents based on their
         relevance to a given search query. It is often applied in keyword-based search systems
         and is particularly effective in ranking large collections of text data.""",
-
         """Hybrid search combines the strengths of keyword-based search with semantic search.
         Keyword-based search like BM25 focuses on matching exact terms, while semantic search
         uses dense vector representations to capture the contextual meaning of terms in a query.""",
-
         """Deep learning has revolutionized computer vision, enabling applications like image
         classification, object detection, and facial recognition. Convolutional neural networks
         (CNNs) are a common architecture used in these applications, designed specifically to
-        process grid-like data such as images."""
+        process grid-like data such as images.""",
     ]
 
     keyword_search = KeywordSearchBM25(documents)

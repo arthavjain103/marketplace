@@ -61,8 +61,12 @@ changes, and submitting pull requests.
 
    ```bash
    uv run pytest tests/ -q
-   uv run pytest tests/ --cov        # coverage must stay >= 50%
+   uv run pytest tests/ --cov        # coverage must stay >= 60%
    ```
+
+   Integration tests run as part of the default suite. Tests that need real
+   model weights opt in via `RUN_MODEL_TESTS=1 uv run pytest tests/ -m
+   integration` (downloads models on first run).
 
 5. Frontend: verify the production build:
 
