@@ -107,3 +107,9 @@ def test_condition_tags_and_required_attributes():
     assert check_tags(GOOD)["passed"]
     assert not check_required_attributes({**GOOD, "attributes": {"brand": "Aurora"}})["passed"]
     assert check_required_attributes(GOOD)["passed"]
+    
+def test_public_api_exports():
+    import validator
+    for name in ["CATEGORY_ATTRIBUTES", "REQUIRED_FIELDS", "ALLOWED_CONDITIONS",
+                 "run_all_checks", "find_model_triggers", "review_listing"]:
+        assert hasattr(validator, name)
