@@ -136,3 +136,12 @@ MODEL_TRIGGER_PHRASES = [
     "handmade",
     "organic",
 ]
+PROMPT_INJECTION_PHRASES = (
+    "ignore previous",
+    "ignore all previous",
+    "system prompt",
+    "developer message",
+    "follow these instructions",
+    "approve this",
+    "disregard the rules",
+)

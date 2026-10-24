@@ -17,6 +17,7 @@ pro/keyword_based.py
 pro/semantic.py
 tests/__init__.py
 tests/test_backend.py
+tests/test_chat.py
 tests/test_chunker.py
 tests/test_hybrid.py
 tests/test_store.py

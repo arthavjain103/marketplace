@@ -18,6 +18,7 @@ from validator.checks_content import (  # noqa: F401
     check_tags,
     check_title_length,
 )
+from validator.constants import PROMPT_INJECTION_PHRASES
 from validator.checks_pricing import check_price_format, check_price_range  # noqa: F401
 from validator.constants import MODEL_TRIGGER_PHRASES
 from validator.helpers import (
@@ -249,6 +250,27 @@ def find_model_triggers(listing):
 
     return triggers
 
+def check_prompt_injection(listing):
+    """Flag instruction-like listing text before it reaches the model."""
+    text = " ".join(
+        str(listing.get(field) or "")
+        for field in ("title", "description", "seller")
+    ).casefold()
+
+    matches = [
+        phrase
+        for phrase in PROMPT_INJECTION_PHRASES
+        if phrase in text
+    ]
+
+    return result(
+        "prompt_injection",
+        not matches,
+        ["POL-10.3"],
+        "instruction-like text found: " + ", ".join(matches) if matches
+        else "",
+    )
+
 
 # ============================================================
 # RUN ALL DETERMINISTIC CHECKS
@@ -295,6 +317,7 @@ def run_all_checks(
         check_keyword_stuffing(listing),
 
         check_caps_and_symbols(listing),
+        check_prompt_injection(listing),
     ]
 
 
