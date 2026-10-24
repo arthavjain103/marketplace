@@ -1,6 +1,8 @@
 fastapi>=0.104
 uvicorn>=0.24
 python-dotenv>=1.0
+prometheus-client>=0.20
+sentry-sdk[fastapi]>=2.0
 langchain-groq>=1.0
 langchain-pinecone>=0.2
 pinecone>=7.0

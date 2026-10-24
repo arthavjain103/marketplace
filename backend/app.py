@@ -3,6 +3,9 @@
 import logging
 import os
 import pickle
+import sqlite3
+import time
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +13,9 @@ from pydantic import BaseModel, Field, field_validator
 
 import store
 from app_logging import setup as setup_logging
+from backend.errors import register_exception_handlers
+from backend.middleware import ObservabilityMiddleware
+from backend.monitoring import init_sentry, register_metrics
 from llm.chat import (
     format_context,
     generate_answer,
@@ -20,6 +26,7 @@ from llm.chat import (
 from validator import CATEGORY_ATTRIBUTES
 
 setup_logging(os.getenv("LOG_LEVEL", "INFO"))
+init_sentry()
 logger = logging.getLogger("marketplace.api")
 
 CATEGORIES = [c.title() for c in CATEGORY_ATTRIBUTES]
@@ -50,9 +57,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(ObservabilityMiddleware)
+register_exception_handlers(app)
+register_metrics(app)
 
-_state = {"keyword": None, "hybrid": None, "loaded": False}
-_conn = None
+_state: dict[str, Any] = {"keyword": None, "hybrid": None, "loaded": False}
+_conn: sqlite3.Connection | None = None
 
 
 def get_conn():
@@ -230,19 +240,42 @@ def init_models():
     from pro.hybrid import CombinedSearch
     from pro.semantic import SemanticSearch
 
+    start = time.perf_counter()
     if not os.path.exists("data/bm25.pkl"):
+        logger.error(
+            "models_init_failed",
+            extra={"extra_data": {"reason": "data/bm25.pkl not found"}},
+        )
         raise HTTPException(status_code=500, detail="data/bm25.pkl not found. Run ingest.py first.")
-    with open("data/bm25.pkl", "rb") as f:
-        keyword = pickle.load(f)
-    semantic = SemanticSearch()
-    _state.update(keyword=keyword, hybrid=CombinedSearch(keyword, semantic), loaded=True)
-    logger.info("models_initialized")
+    try:
+        with open("data/bm25.pkl", "rb") as f:
+            keyword = pickle.load(f)
+        semantic = SemanticSearch()
+        hybrid = CombinedSearch(keyword, semantic)
+    except Exception:
+        # Pinecone, model download or pickle corruption: log the stack, keep
+        # the client response generic, and leave _state untouched so init can
+        # be retried.
+        logger.exception(
+            "models_init_failed",
+            extra={"extra_data": {"reason": "model load failed"}},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Model initialization failed. Check server logs.",
+        ) from None
+    _state.update(keyword=keyword, hybrid=hybrid, loaded=True)
+    logger.info(
+        "models_initialized",
+        extra={"extra_data": {"elapsed_ms": int((time.perf_counter() - start) * 1000)}},
+    )
     return {"status": "ok"}
 
 
 @app.post("/api/reviews")
 def create_review(req: ReviewRequest):
     require_models()
+    start = time.perf_counter()
     listing = req.listing.model_dump()
     result = review_listing_with_ai(
         listing, req.others, _state["keyword"], _state["hybrid"], top_n=req.top_n
@@ -266,6 +299,8 @@ def create_review(req: ReviewRequest):
                 "review_id": review_id,
                 "failed": len(result["failed"]),
                 "ai_findings": len((result.get("ai") or {}).get("findings", [])),
+                "ai_error": bool(result.get("error")),
+                "duration_ms": int((time.perf_counter() - start) * 1000),
             }
         },
     )
@@ -349,8 +384,10 @@ def record_decision(req: DecisionRequest):
         raise HTTPException(status_code=400, detail="Reviewer name is required.")
     reviews = store.get_reviews(conn)
     review = next((r for r in reviews if r["id"] == req.review_id), None)
+    if not review:
+        raise HTTPException(status_code=404, detail="Review not found.")
     listings = {listing_row["id"]: listing_row for listing_row in store.get_listings(conn)}
-    listing = listings.get(review["listing_id"], {}) if review else {}
+    listing = listings.get(review["listing_id"], {})
     if is_self_review(req.reviewer, listing.get("seller")):
         raise HTTPException(
             status_code=403,
@@ -389,6 +426,38 @@ def record_decision(req: DecisionRequest):
 @app.post("/api/ask")
 def ask_policy(req: AskRequest):
     require_models()
-    results = _state["hybrid"].search(query=req.query, top_n=req.top_n)
-    answer = generate_answer(req.query, format_context(results))
+    start = time.perf_counter()
+    try:
+        results = _state["hybrid"].search(query=req.query, top_n=req.top_n)
+    except Exception:
+        logger.exception(
+            "ask_retrieval_failed",
+            extra={"extra_data": {"query_chars": len(req.query), "top_n": req.top_n}},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Search backend is temporarily unavailable. Please try again later.",
+        ) from None
+    try:
+        answer = generate_answer(req.query, format_context(results))
+    except Exception:
+        # generate_answer already logged qa_answer_failed with the stack trace.
+        logger.warning(
+            "ask_answer_unavailable",
+            extra={"extra_data": {"query_chars": len(req.query)}},
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="AI answer is temporarily unavailable. Please try again later.",
+        ) from None
+    logger.info(
+        "ask_completed",
+        extra={
+            "extra_data": {
+                "query_chars": len(req.query),
+                "chunks": len(results),
+                "elapsed_ms": int((time.perf_counter() - start) * 1000),
+            }
+        },
+    )
     return {"answer": answer, "chunks": serialize_retrieved(results)}

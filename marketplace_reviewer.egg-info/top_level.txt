@@ -1,6 +1,0 @@
-backend
-ingestion
-llm
-pro
-tests
-validator

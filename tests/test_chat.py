@@ -3,8 +3,6 @@
 Mocks langchain_groq.ChatGroq.invoke so no real Groq API calls are made.
 """
 
-from types import SimpleNamespace
-
 import pytest
 
 import llm.chat as chat
@@ -37,12 +35,13 @@ def groq(monkeypatch):
 # _parse_json
 # ---------------------------------------------------------------------------
 
+
 def test_parse_json_plain_object():
     assert chat._parse_json('{"a": 1, "b": "two"}') == {"a": 1, "b": "two"}
 
 
 def test_parse_json_strips_markdown_code_fences():
-    text = "```json\n{\"a\": 1}\n```"
+    text = '```json\n{"a": 1}\n```'
     assert chat._parse_json(text) == {"a": 1}
 
 
@@ -55,7 +54,7 @@ def test_parse_json_repairs_trailing_comma_before_bracket():
 
 
 def test_parse_json_extracts_first_balanced_block():
-    text = "Here is the result:\n{\"findings\": []}\nAnd nothing else."
+    text = 'Here is the result:\n{"findings": []}\nAnd nothing else.'
     assert chat._parse_json(text) == {"findings": []}
 
 
@@ -112,8 +111,7 @@ def test_validate_review_ungrounded_moved_to_style_suggestions():
     }
     out = chat.validate_review(raw, VALID)
     assert out["findings"] == []
-    assert any("title" in s and "claim" in s and "reword" in s
-               for s in out["style_suggestions"])
+    assert any("title" in s and "claim" in s and "reword" in s for s in out["style_suggestions"])
 
 
 def test_validate_review_mixed_grounded_and_ungrounded():
@@ -133,12 +131,14 @@ def test_validate_review_mixed_grounded_and_ungrounded():
 
 def test_validate_review_normalizes_enums():
     raw = {
-        "findings": [_finding(
-            ["POL-6.2"],
-            field="UnknownField",
-            issue_type="not-a-real-type",
-            severity="critical",
-        )],
+        "findings": [
+            _finding(
+                ["POL-6.2"],
+                field="UnknownField",
+                issue_type="not-a-real-type",
+                severity="critical",
+            )
+        ],
         "assumptions": [],
         "style_suggestions": [],
         "revised_listing": {},
@@ -163,8 +163,7 @@ def test_validate_review_sorts_by_severity():
         "revised_listing": {},
     }
     out = chat.validate_review(raw, VALID)
-    assert [f["severity"] for f in out["findings"]] == [
-        "Critical", "Major", "Minor", "Info"]
+    assert [f["severity"] for f in out["findings"]] == ["Critical", "Major", "Minor", "Info"]
 
 
 def test_validate_review_revised_listing_restricted_to_allowed_fields():
@@ -176,8 +175,8 @@ def test_validate_review_revised_listing_restricted_to_allowed_fields():
             "title": "New",
             "description": "D",
             "tags": ["t"],
-            "price": "9.99",   # not allowed
-            "category": "X",   # not allowed
+            "price": "9.99",  # not allowed
+            "category": "X",  # not allowed
         },
     }
     out = chat.validate_review(raw, set())
@@ -194,3 +193,126 @@ def test_validate_review_empty_input():
 def test_validate_review_non_dict_raises():
     with pytest.raises(ValueError):
         chat.validate_review("not a dict", VALID)
+
+
+# ---------------------------------------------------------------------------
+# _ask retry policy: non-retryable client errors abort, server errors retry
+# ---------------------------------------------------------------------------
+
+
+class _APIError(Exception):
+    """Stands in for groq SDK errors, which carry a status_code attribute."""
+
+    def __init__(self, status_code):
+        super().__init__(f"HTTP {status_code}")
+        self.status_code = status_code
+
+
+@pytest.fixture(autouse=True)
+def _reset_circuit():
+    chat._consecutive_failures = 0
+    yield
+    chat._consecutive_failures = 0
+
+
+def _patch_invoke(monkeypatch, invoke):
+    calls = []
+
+    def wrapper(self, messages):
+        calls.append(1)
+        return invoke(self, messages)
+
+    monkeypatch.setattr(chat.ChatGroq, "invoke", wrapper)
+    monkeypatch.setattr(chat.time, "sleep", lambda seconds: None)
+    return calls
+
+
+def _raise(error):
+    def invoke(self, messages):
+        raise error
+
+    return invoke
+
+
+def test_ask_does_not_retry_client_errors(monkeypatch):
+    calls = _patch_invoke(monkeypatch, _raise(_APIError(401)))
+    with pytest.raises(_APIError):
+        chat._ask("system", "user")
+    assert len(calls) == 1
+
+
+def test_ask_retries_server_errors_up_to_three_attempts(monkeypatch):
+    calls = _patch_invoke(monkeypatch, _raise(_APIError(503)))
+    with pytest.raises(_APIError):
+        chat._ask("system", "user")
+    assert len(calls) == 3
+
+
+def test_ask_json_fallback_success_on_client_error(monkeypatch):
+    calls = []
+
+    def invoke(self, messages):
+        if len(calls) == 1:
+            raise _APIError(400)  # e.g. response_format unsupported
+        return _FakeMessage('{"findings": []}')
+
+    calls = _patch_invoke(monkeypatch, invoke)
+    assert chat._ask("system", "user", json_mode=True) == '{"findings": []}'
+    assert len(calls) == 2  # json attempt + plain fallback, no retry loop
+
+
+def test_ask_json_fallback_failure_aborts_without_retries(monkeypatch):
+    calls = _patch_invoke(monkeypatch, _raise(_APIError(400)))
+    with pytest.raises(_APIError):
+        chat._ask("system", "user", json_mode=True)
+    assert len(calls) == 2
+
+
+def test_ask_circuit_open_blocks_calls(monkeypatch):
+    calls = _patch_invoke(monkeypatch, lambda self, messages: _FakeMessage("ok"))
+    chat._consecutive_failures = chat._CIRCUIT_LIMIT
+    with pytest.raises(RuntimeError, match="circuit"):
+        chat._ask("system", "user")
+    assert calls == []
+
+
+def test_ask_success_resets_failure_counter(monkeypatch):
+    monkeypatch.setattr(chat.ChatGroq, "invoke", lambda self, messages: _FakeMessage("ok"))
+    chat._consecutive_failures = chat._CIRCUIT_LIMIT - 1
+    assert chat._ask("system", "user") == "ok"
+    assert chat._consecutive_failures == 0
+
+
+# ---------------------------------------------------------------------------
+# retrieve_for_listing: search backend failures degrade to fixed chunks
+# ---------------------------------------------------------------------------
+
+
+class _FakeKeywordSearch:
+    documents = ["Rule POL-1 text.", "Category requirements for electronics."]
+    metadatas = [
+        {"chunk_type": "rule", "rule_id": "POL-1", "chunk_id": "c1"},
+        {"chunk_type": "category_requirements", "category": "electronics", "chunk_id": "c2"},
+    ]
+
+
+class _BrokenHybrid:
+    def search(self, query, top_n=5):
+        raise ConnectionError("pinecone down")
+
+
+def test_retrieve_degrades_to_fixed_chunks_when_search_backend_fails():
+    listing = {"category": "Electronics", "title": "t", "description": "d"}
+    out = chat.retrieve_for_listing(_BrokenHybrid(), _FakeKeywordSearch(), listing, [], [])
+    assert [item["via"] for _score, item in out] == ["category"]
+
+
+def test_retrieve_uses_search_results_when_backend_healthy():
+    class HealthyHybrid:
+        def search(self, query, top_n=5):
+            return [(0.9, {"text": "searched chunk", "metadata": {"chunk_id": "c3"}})]
+
+    listing = {"category": "Electronics", "title": "t", "description": "d"}
+    out = chat.retrieve_for_listing(HealthyHybrid(), _FakeKeywordSearch(), listing, [], [])
+    vias = [item["via"] for _score, item in out]
+    assert "search" in vias and "category" in vias

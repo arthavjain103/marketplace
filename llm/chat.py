@@ -22,8 +22,8 @@ logger = logging.getLogger("marketplace.ai")
 
 
 # LLM client (lazy so import does not require an API key).
-_llm_cache = {}
-_review_cache = {}
+_llm_cache: dict[bool, ChatGroq] = {}
+_review_cache: dict[str, dict] = {}
 _consecutive_failures = 0
 _CIRCUIT_LIMIT = 5
 
@@ -41,32 +41,100 @@ def _get_llm(json_mode=False):
         if json_mode:
             kwargs["model_kwargs"] = {"response_format": {"type": "json_object"}}
         _llm_cache[json_mode] = ChatGroq(**kwargs)
+        logger.info(
+            "llm_initialized",
+            extra={"extra_data": {"model": MODEL_NAME, "json_mode": json_mode}},
+        )
     return _llm_cache[json_mode]
+
+
+def _non_retryable(error):
+    """True for client-side API errors (4xx except 429) that a retry cannot fix."""
+    status = getattr(error, "status_code", None)
+    return isinstance(status, int) and 400 <= status < 500 and status != 429
 
 
 def _ask(system, user, json_mode=False):
     global _consecutive_failures
     if _consecutive_failures >= _CIRCUIT_LIMIT:
+        logger.error(
+            "llm_circuit_open",
+            extra={"extra_data": {"consecutive_failures": _consecutive_failures}},
+        )
         raise RuntimeError("AI circuit is open after repeated failures.")
     messages = [("system", system), ("human", user)]
-    last_error = None
+    last_error: Exception | None = None
     for attempt in range(3):
+        start = time.monotonic()
         try:
             content = _get_llm(json_mode).invoke(messages).content
             _consecutive_failures = 0
+            logger.info(
+                "llm_call",
+                extra={
+                    "extra_data": {
+                        "attempt": attempt + 1,
+                        "json_mode": json_mode,
+                        "elapsed_ms": int((time.monotonic() - start) * 1000),
+                    }
+                },
+            )
             return content
         except Exception as error:
             last_error = error
+            logger.warning(
+                "llm_call_failed",
+                extra={
+                    "extra_data": {
+                        "attempt": attempt + 1,
+                        "json_mode": json_mode,
+                        "exception": type(error).__name__,
+                        "error": str(error)[:300],
+                        "elapsed_ms": int((time.monotonic() - start) * 1000),
+                    }
+                },
+            )
             if json_mode and attempt == 0:
                 try:
                     content = _get_llm(False).invoke(messages).content
                     _consecutive_failures = 0
+                    logger.info(
+                        "llm_call",
+                        extra={
+                            "extra_data": {
+                                "attempt": attempt + 1,
+                                "json_mode": False,
+                                "fallback": True,
+                                "elapsed_ms": int((time.monotonic() - start) * 1000),
+                            }
+                        },
+                    )
                     return content
                 except Exception as fallback_error:
                     last_error = fallback_error
+                    logger.warning(
+                        "llm_json_fallback_failed",
+                        extra={"extra_data": {"exception": type(fallback_error).__name__}},
+                    )
             _consecutive_failures += 1
+            assert last_error is not None
+            if _non_retryable(last_error):
+                logger.error(
+                    "llm_call_aborted",
+                    extra={
+                        "extra_data": {
+                            "exception": type(last_error).__name__,
+                            "error": str(last_error)[:300],
+                        }
+                    },
+                )
+                raise last_error from error
             if attempt < 2:
                 time.sleep((2**attempt) * 0.2 + random.uniform(0, 0.1))
+    logger.error(
+        "llm_call_exhausted",
+        extra={"extra_data": {"exception": type(last_error).__name__ if last_error else "none"}},
+    )
     raise last_error
 
 
@@ -295,8 +363,25 @@ def retrieve_for_listing(hybrid_search, keyword_search, listing, triggers, faile
     ]
     phrases = sorted({t["phrase"] for t in triggers})[:4]
     queries += [f"{p} claim rules" for p in phrases]
+    search_start = time.monotonic()
     for q in queries:
-        for score, item in hybrid_search.search(query=q, top_n=top_n):
+        try:
+            hits = hybrid_search.search(query=q, top_n=top_n)
+        except Exception:
+            # Vector backend down: reviews still run on the fixed chunks
+            # (failed-check rules + category requirements) instead of failing
+            # the whole review. Remaining queries would hit the same backend.
+            logger.exception(
+                "rag_search_failed",
+                extra={
+                    "extra_data": {
+                        "query_chars": len(q),
+                        "chunks_so_far": len(searched) + len(fixed),
+                    }
+                },
+            )
+            break
+        for score, item in hits:
             if len(searched) >= search_keep:
                 break
             text, meta = item_text(item), item_meta(item)
@@ -310,6 +395,17 @@ def retrieve_for_listing(hybrid_search, keyword_search, listing, triggers, faile
         if len(searched) >= search_keep:
             break
 
+    logger.info(
+        "rag_retrieval",
+        extra={
+            "extra_data": {
+                "queries": len(queries),
+                "searched": len(searched),
+                "fixed": len(fixed),
+                "elapsed_ms": int((time.monotonic() - search_start) * 1000),
+            }
+        },
+    )
     return searched + fixed
 
 
@@ -408,5 +504,9 @@ def review_listing_with_ai(listing, other_listings, keyword_search, hybrid_searc
                 "review_attempt_failed", extra={"extra_data": {"attempt": attempt, "error": str(e)}}
             )
     result["error"] = f"AI review failed (after 2 attempts): {last_error}"
-    logger.error("review_failed", extra={"extra_data": {"error": str(last_error)}})
+    logger.error(
+        "review_failed",
+        exc_info=last_error,
+        extra={"extra_data": {"error": str(last_error)}},
+    )
     return result

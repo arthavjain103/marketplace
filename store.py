@@ -16,6 +16,7 @@ reviewer name, action (approve / edit / reject), timestamp.
 
 import hashlib
 import json
+import logging
 import sqlite3
 import threading
 from datetime import UTC, datetime
@@ -23,6 +24,8 @@ from functools import wraps
 from pathlib import Path
 
 DEFAULT_DB = str(Path(__file__).parent / "data" / "reviews.db")
+
+logger = logging.getLogger("marketplace.store")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS listings (
@@ -90,7 +93,13 @@ def _sync(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         with _lock:
-            return fn(*args, **kwargs)
+            try:
+                return fn(*args, **kwargs)
+            except sqlite3.Error:
+                # Log with stack trace, then re-raise so callers (and the API
+                # layer's sqlite3.Error handler) still see the failure.
+                logger.exception("db_error", extra={"extra_data": {"op": fn.__name__}})
+                raise
 
     return wrapper
 

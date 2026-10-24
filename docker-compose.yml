@@ -10,6 +10,9 @@ services:
       - PINECONE_INDEX
       - GROQ_API_KEY
       - LOG_LEVEL=INFO
+      - SENTRY_DSN
+      - SENTRY_ENVIRONMENT
+      - SENTRY_TRACES_SAMPLE_RATE
     volumes:
       - marketplace-data:/app/data
     healthcheck:
