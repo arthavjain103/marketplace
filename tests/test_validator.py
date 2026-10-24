@@ -81,3 +81,9 @@ def test_keyword_stuffing_and_caps():
 def test_triggers_are_signals_not_failures():
     triggers = find_model_triggers({**GOOD, "description": "100% guaranteed cure, doctor recommended."})
     assert {t["phrase"] for t in triggers} >= {"100%", "guaranteed", "cure", "doctor"}
+    
+def test_public_api_exports():
+    import validator
+    for name in ["CATEGORY_ATTRIBUTES", "REQUIRED_FIELDS", "ALLOWED_CONDITIONS",
+                 "run_all_checks", "find_model_triggers", "review_listing"]:
+        assert hasattr(validator, name)
