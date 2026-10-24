@@ -14,6 +14,9 @@ from validator import (
     find_model_triggers,
     run_all_checks,
     check_price_range,
+    check_condition,
+    check_tags,
+    check_required_attributes,
 )
 
 GOOD = {
@@ -95,3 +98,12 @@ def test_price_range_bounds_and_skip():
     assert not check_price_range({**GOOD, "price": "0.00"})["passed"]
     skipped = check_price_range({**GOOD, "price": "$5"})
     assert skipped["skipped"] and skipped["passed"]
+
+def test_condition_tags_and_required_attributes():
+    assert not check_condition({**GOOD, "attributes": {**GOOD["attributes"], "condition": "Mint"}})["passed"]
+    assert check_condition(GOOD)["passed"]
+    assert not check_tags({**GOOD, "tags": ["x"] * 11})["passed"]
+    assert not check_tags({**GOOD, "tags": ["a"]})["passed"]
+    assert check_tags(GOOD)["passed"]
+    assert not check_required_attributes({**GOOD, "attributes": {"brand": "Aurora"}})["passed"]
+    assert check_required_attributes(GOOD)["passed"]
