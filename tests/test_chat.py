@@ -27,7 +27,6 @@ def groq(monkeypatch):
         return _FakeMessage(responses.pop(0) if responses else "{}")
 
     monkeypatch.setattr(chat.ChatGroq, "invoke", fake_invoke)
-    monkeypatch.setattr(chat.config, "GROQ_API_KEY", "test-key")
     monkeypatch.setattr(chat, "GROQ_API_KEY", "test-key")
     chat._llm_cache.clear()
     return responses
