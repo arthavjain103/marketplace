@@ -13,6 +13,7 @@ from validator import (
     check_title_length,
     find_model_triggers,
     run_all_checks,
+    check_price_range,
 )
 
 GOOD = {
@@ -87,3 +88,10 @@ def test_public_api_exports():
     for name in ["CATEGORY_ATTRIBUTES", "REQUIRED_FIELDS", "ALLOWED_CONDITIONS",
                  "run_all_checks", "find_model_triggers", "review_listing"]:
         assert hasattr(validator, name)
+        
+def test_price_range_bounds_and_skip():
+    assert check_price_range(GOOD)["passed"]
+    assert not check_price_range({**GOOD, "price": "100000.01"})["passed"]
+    assert not check_price_range({**GOOD, "price": "0.00"})["passed"]
+    skipped = check_price_range({**GOOD, "price": "$5"})
+    assert skipped["skipped"] and skipped["passed"]
